@@ -161,6 +161,6 @@ Google Translate API: Text translation service
 
 Author
 
-Your Name: Krishank Dubey
+Name: Krishank Dubey
 Email: krishank.dubey2424@gmail.com
 
