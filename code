@@ -1,0 +1,111 @@
+from flask import Flask, jsonify, request
+from pymongo import MongoClient
+from googletrans import Translator
+import boto3
+import firebase_admin
+from firebase_admin import credentials, auth, messaging
+import datetime
+
+# Flask App Initialization
+app = Flask(__name__)
+
+# Firebase Initialization
+cred = credentials.Certificate("path/to/firebase-service-account.json")
+firebase_admin.initialize_app(cred)
+
+# MongoDB Initialization
+mongo_client = MongoClient("mongodb+srv://<username>:<password>@cluster.mongodb.net/?retryWrites=true&w=majority")
+db = mongo_client["pragati_db"]
+users_collection = db["users"]
+
+# AWS S3 Configuration
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id="your_aws_access_key_id",
+    aws_secret_access_key="your_aws_secret_access_key",
+    region_name="your_region",
+)
+BUCKET_NAME = "your_s3_bucket_name"
+
+# Translator instance for multilingual support
+translator = Translator()
+
+# User Registration
+@app.route("/user/register", methods=["POST"])
+def register_user():
+    data = request.json
+    user = {
+        "name": data["name"],
+        "location": data["location"],
+        "income": data["income"],
+        "occupation": data["occupation"],
+        "language": data["language"],
+        "goals": [],
+        "documents": [],
+    }
+    users_collection.insert_one(user)
+    return jsonify({"message": "User registered successfully!", "user_id": str(user["_id"])}), 201
+
+# Upload Document to AWS S3
+@app.route("/user/upload", methods=["POST"])
+def upload_document():
+    user_id = request.form["user_id"]
+    file = request.files["file"]
+    file_name = f"{user_id}/{file.filename}"
+    
+    try:
+        s3.upload_fileobj(file, BUCKET_NAME, file_name)
+        users_collection.update_one(
+            {"_id": user_id},
+            {"$push": {"documents": {"name": file.filename, "uploaded_on": datetime.datetime.now().isoformat()}}}
+        )
+        return jsonify({"message": "Document uploaded successfully!", "file_url": f"https://{BUCKET_NAME}.s3.amazonaws.com/{file_name}"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Translate Text
+@app.route("/user/translate", methods=["POST"])
+def translate_text():
+    data = request.json
+    translated_text = translator.translate(data["text"], dest=data["language"]).text
+    return jsonify({"translated_text": translated_text})
+
+# Scheme Recommendations (Mock)
+@app.route("/user/schemes", methods=["GET"])
+def get_schemes():
+    schemes = [{"name": "PMJDY", "description": "Jan Dhan Yojana"}, {"name": "PM MUDRA", "description": "MUDRA Loan Scheme"}]
+    return jsonify({"schemes": schemes})
+
+# Set Financial Goals
+@app.route("/user/goals", methods=["POST"])
+def set_goals():
+    data = request.json
+    user_id = data["user_id"]
+    goal = {
+        "goal": data["goal_name"],
+        "target_amount": data["target_amount"],
+        "current_savings": data.get("current_savings", 0),
+    }
+    users_collection.update_one({"_id": user_id}, {"$push": {"goals": goal}})
+    return jsonify({"message": "Goal added successfully!"})
+
+# Notify Users via Firebase
+@app.route("/user/notify", methods=["POST"])
+def send_notification():
+    data = request.json
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title=data["title"],
+                body=data["body"],
+            ),
+            token=data["token"],  # Firebase device token
+        )
+        response = messaging.send(message)
+        return jsonify({"message": "Notification sent successfully!", "response": response}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Run the Flask App
+if __name__ == "__main__":
+    app.run(debug=True)
